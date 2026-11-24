@@ -1,0 +1,39 @@
+# Deny by default: anything not listed here is blocked.
+# Generate a key with `aegis hash-key` and paste the sha256 below.
+version: 1
+
+risk:
+  ask_threshold: 50   # >= this: human approval required
+  deny_threshold: 80  # >= this: blocked outright
+
+agents:
+  research-agent:
+    key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    rate_limit:
+      per_minute: 60
+    tools:
+      read_file:
+        constraints:
+          path:
+            required: true
+            prefix: ["/workspace"]
+            deny_regex: ['\.env$', 'id_rsa']
+            max_len: 512
+      http_get:
+        constraints:
+          url:
+            required: true
+            host_allow: ["api.github.com", "en.wikipedia.org"]
+      run_shell:
+        effect: ask          # always needs a human
+        constraints:
+          command:
+            required: true
+            max_len: 500
+      run_python:            # code is also statically analyzed by the sandbox analyzer
+        effect: allow
+        constraints:
+          code:
+            required: true
+            analyze_python: true
+            max_len: 4000
