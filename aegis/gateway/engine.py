@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 
 from aegis.analyzer import ScriptAnalyzer
 from aegis.gateway import risk
+from aegis.gateway.approvals import Approval, ApprovalStore
 from aegis.gateway.audit import AuditLog
+from aegis.gateway.metrics import Metrics
 from aegis.gateway.models import Decision, Effect, ToolCall
 from aegis.gateway.policy import Policy
 from aegis.gateway.ratelimit import TokenBucket
@@ -17,10 +20,19 @@ log = logging.getLogger("aegis")
 
 
 class Aegis:
-    def __init__(self, policy: Policy, audit: AuditLog, limiter: TokenBucket | None = None) -> None:
+    def __init__(
+        self,
+        policy: Policy,
+        audit: AuditLog,
+        limiter: TokenBucket | None = None,
+        approvals: ApprovalStore | None = None,
+        metrics: Metrics | None = None,
+    ) -> None:
         self._policy = policy
         self._audit = audit
         self._limiter = limiter or TokenBucket()
+        self.approvals = approvals
+        self.metrics = metrics
         self._analyzer = ScriptAnalyzer()
 
     # -- policy lifecycle -------------------------------------------------
@@ -40,12 +52,45 @@ class Aegis:
 
     # -- decision ---------------------------------------------------------
     def decide(self, call: ToolCall) -> Decision:
+        started = time.perf_counter()
         try:
             decision = self._evaluate(call)
+            if decision.effect == Effect.ASK and self.approvals is not None:
+                approval = self.approvals.create(call)
+                if approval is None:
+                    decision = self._deny(call, "approval queue full", "approval_queue_full")
+                else:
+                    decision = decision.model_copy(update={"approval_id": approval.id})
         except Exception:  # noqa: BLE001 - any failure must deny
             log.exception("evaluation failed; denying")
             decision = self._deny(call, "internal error (fail-closed)", "fail_closed")
-        return self._record(call, decision)
+        final = self._record(call, decision)
+        if self.metrics is not None:
+            self.metrics.observe_decision(
+                final.effect.value, final.rule, time.perf_counter() - started
+            )
+        return final
+
+    def audit(self, call: ToolCall, decision: Decision) -> None:
+        """Write a decision to the audit log. Raises if the log is unwritable (caller fails closed)."""
+        self._audit.append(call, decision)
+
+    def resolve_approval(self, approval_id: str, approve: bool, approver: str) -> Approval | None:
+        """Audit then resolve a pending approval. Audit failure propagates, leaving it pending."""
+        if self.approvals is None:
+            return None
+        item = self.approvals.get(approval_id)
+        if item is None or item.status != "pending":
+            return None
+        verdict = Decision(
+            effect=Effect.ALLOW if approve else Effect.DENY,
+            reason=f"{'approved' if approve else 'denied'} by {approver}",
+            rule="approval_granted" if approve else "approval_denied",
+            request_id=item.call.request_id,
+            approval_id=item.id,
+        )
+        self._audit.append(item.call, verdict)
+        return self.approvals.resolve(approval_id, approve, approver)
 
     def reject_unauthenticated(self, call: ToolCall) -> Decision:
         return self._record(call, self._deny(call, "authentication failed", "authn"))

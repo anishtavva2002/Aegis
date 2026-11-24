@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import secrets
+import sys
 from pathlib import Path
 
 
@@ -28,6 +29,18 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--gateway-audit", required=True)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8080)
+
+    mcp = sub.add_parser("mcp-proxy", help="Guard an MCP server over stdio")
+    mcp.add_argument("--gateway-policy", required=True)
+    mcp.add_argument("--gateway-audit", required=True)
+    mcp.add_argument("--agent-id", required=True)
+    mcp.add_argument("--approve-prompt", action="store_true",
+                     help="Ask on the terminal when a call needs approval (default: refuse)")
+    mcp.add_argument("--block-injection", action="store_true",
+                     help="Block tool output that looks like prompt injection")
+    mcp.add_argument("--no-redact", action="store_true", help="Do not redact secrets in output")
+    mcp.add_argument("server_cmd", nargs=argparse.REMAINDER,
+                     help="-- followed by the MCP server command")
     return parser
 
 
@@ -77,6 +90,28 @@ def main(argv=None) -> int:
         ok, count, error = verify_log(args.log) if is_gateway else verify_chain(args.log)
         print(f"OK: {count} record(s)" if ok else f"TAMPERED after {count} record(s): {error}")
         return 0 if ok else 1
+
+    if args.command == "mcp-proxy":
+        from .gateway import Aegis, AuditLog, Policy
+        from .mcp import McpGuard, run_stdio_proxy
+        from .mcp.proxy import tty_approver
+
+        cmd = args.server_cmd[1:] if args.server_cmd[:1] == ["--"] else args.server_cmd
+        if not cmd:
+            print("error: missing MCP server command after --", file=sys.stderr)
+            return 2
+        policy = Policy.load(args.gateway_policy)
+        if args.agent_id not in policy.agents:
+            print(f"error: agent {args.agent_id!r} is not in the policy", file=sys.stderr)
+            return 2
+        engine = Aegis(policy, AuditLog(args.gateway_audit))
+        guard = McpGuard(
+            engine, args.agent_id,
+            approver=tty_approver if args.approve_prompt else None,
+            redact=not args.no_redact,
+            block_injection=args.block_injection,
+        )
+        return run_stdio_proxy(guard, cmd)
 
     if args.command == "serve":
         import uvicorn
