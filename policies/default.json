@@ -1,0 +1,10 @@
+{
+  "deny_threshold": 80,
+  "approval_threshold": 35,
+  "max_timeout_seconds": 20,
+  "memory_limit": "128m",
+  "nano_cpus": 500000000,
+  "pids_limit": 64,
+  "network_disabled": true,
+  "read_only_rootfs": true
+}
