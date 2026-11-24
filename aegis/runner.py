@@ -1,8 +1,7 @@
 import tempfile
 from pathlib import Path
 import docker
-from docker.errors import DockerException, ImageNotFound, ContainerError
-from .models import Decision
+from docker.errors import DockerException, ImageNotFound
 
 class DockerRunner:
     """Runs code in a bounded container. Requires a trusted local Docker daemon."""
