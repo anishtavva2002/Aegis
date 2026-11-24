@@ -29,8 +29,9 @@ def args_digest(args: dict[str, Any]) -> str:
 
 
 class AuditLog:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, fsync: bool = True) -> None:
         self.path = Path(path)
+        self._fsync = fsync
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._seq, self._prev = self._resume()
@@ -64,7 +65,8 @@ class AuditLog:
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
                 os.write(fd, line.encode())
-                os.fsync(fd)
+                if self._fsync:
+                    os.fsync(fd)
             finally:
                 os.close(fd)
             self._seq, self._prev = record["seq"], record["hash"]

@@ -10,7 +10,8 @@ DEFAULT_POLICY = {
     "nano_cpus": 500000000,
     "pids_limit": 64,
     "network_disabled": True,
-    "read_only_rootfs": True
+    "read_only_rootfs": True,
+    "runtime": None
 }
 
 class PolicyEngine:
@@ -30,6 +31,8 @@ class PolicyEngine:
             raise ValueError("nano_cpus must be between 1 and 2 CPUs.")
         if not self.policy["network_disabled"]:
             raise ValueError("Network must remain disabled in this v1 implementation.")
+        if self.policy.get("runtime") not in (None, "runsc", "kata-runtime", "kata"):
+            raise ValueError("runtime must be one of: null, runsc, kata-runtime, kata.")
         if not self.policy["read_only_rootfs"]:
             raise ValueError("Read-only root filesystem must remain enabled in v1.")
 

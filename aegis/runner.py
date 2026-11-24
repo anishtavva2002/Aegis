@@ -6,9 +6,9 @@ from docker.errors import DockerException, ImageNotFound
 class DockerRunner:
     """Runs code in a bounded container. Requires a trusted local Docker daemon."""
 
-    def __init__(self, image="python:3.12-slim"):
+    def __init__(self, image="python:3.12-slim", client=None):
         self.image = image
-        self.client = docker.from_env()
+        self.client = client or docker.from_env()
 
     def run(self, source: str, policy: dict):
         try:
@@ -24,6 +24,9 @@ class DockerRunner:
             work = Path(tmp)
             script = work / "job.py"
             script.write_text(source, encoding="utf-8")
+            extra = {}
+            if policy.get("runtime"):  # e.g. "runsc" (gVisor) for a stronger boundary
+                extra["runtime"] = policy["runtime"]
             try:
                 container = self.client.containers.run(
                     self.image,
@@ -42,7 +45,10 @@ class DockerRunner:
                     working_dir="/workspace",
                     stdin_open=False,
                     tty=False,
-                    labels={"org.aegis.managed": "true"}
+                    ulimits=[docker.types.Ulimit(name="nofile", soft=256, hard=256),
+                             docker.types.Ulimit(name="fsize", soft=16_000_000, hard=16_000_000)],
+                    labels={"org.aegis.managed": "true"},
+                    **extra,
                 )
             except DockerException as exc:
                 raise RuntimeError(f"Could not create isolated container: {exc}") from exc

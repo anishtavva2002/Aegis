@@ -47,3 +47,33 @@ def score(args: dict[str, Any]) -> tuple[int, list[str]]:
     hits.sort(reverse=True)
     total = min(100, hits[0][0] + 5 * (len(hits) - 1))
     return total, sorted({label for _, label in hits})
+
+
+_INJECTION = re.compile(
+    r"(?i)(ignore\s+(all\s+)?(previous|prior|above)\s+instructions|disregard\s+(your|the)\s+"
+    r"(system\s+)?(prompt|instructions)|you\s+are\s+now\s+in\s+developer\s+mode)"
+)
+
+_REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
+     "[REDACTED PRIVATE KEY]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "[REDACTED PRIVATE KEY]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED AWS KEY]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"), "[REDACTED GITHUB TOKEN]"),
+    (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{20,}"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b(api[_-]?key|secret|password|token)\b(\s*[=:]\s*)\S{8,}"),
+     r"\1\2[REDACTED]"),
+]
+
+
+def redact(text: str) -> tuple[str, int]:
+    """Mask secrets in tool output. Returns (clean_text, number_of_substitutions)."""
+    total = 0
+    for pattern, replacement in _REDACTIONS:
+        text, n = pattern.subn(replacement, text)
+        total += n
+    return text, total
+
+
+def has_injection(text: str) -> bool:
+    return bool(_INJECTION.search(text))

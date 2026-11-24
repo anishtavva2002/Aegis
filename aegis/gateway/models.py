@@ -26,3 +26,4 @@ class Decision(BaseModel):
     rule: str = "default"
     risk: int = 0
     request_id: str = ""
+    approval_id: str | None = None

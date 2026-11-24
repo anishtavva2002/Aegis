@@ -72,3 +72,68 @@ def test_reload_applies_and_rejects_bad_policy(
     assert client.post("/v1/admin/reload", headers=admin).status_code == 400
     # previous (now tool-less) policy still serving
     assert client.post("/v1/decide", json=body(text="x"), headers=AUTH).status_code == 200
+
+
+ADMIN = {"Authorization": "Bearer adm"}
+
+
+def ask_call(client: TestClient) -> str:
+    r = client.post("/v1/decide", json=body("run_shell", command="ls"), headers=AUTH)
+    assert r.json()["effect"] == "ask"
+    return str(r.json()["approval_id"])
+
+
+def test_approval_flow_over_http(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "adm")
+    approval_id = ask_call(client)
+    agent = {**AUTH, "X-Aegis-Agent": "bot"}
+    assert client.get(f"/v1/approvals/{approval_id}", headers=agent).json()["status"] == "pending"
+
+    pending = client.get("/v1/admin/approvals", headers=ADMIN).json()
+    assert [p["id"] for p in pending] == [approval_id]
+
+    assert client.post(f"/v1/admin/approvals/{approval_id}/approve").status_code == 401
+    ok = client.post(
+        f"/v1/admin/approvals/{approval_id}/approve",
+        headers={**ADMIN, "X-Aegis-Approver": "alice"},
+    )
+    assert ok.status_code == 200 and ok.json()["status"] == "approved"
+    assert client.get(f"/v1/approvals/{approval_id}", headers=agent).json()["status"] == "approved"
+    again = client.post(f"/v1/admin/approvals/{approval_id}/deny", headers=ADMIN)
+    assert again.status_code == 404
+
+
+def test_approval_status_is_private_to_the_agent(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "adm")
+    approval_id = ask_call(client)
+    assert client.get(f"/v1/approvals/{approval_id}").status_code == 401
+    wrong = {"Authorization": "Bearer nope", "X-Aegis-Agent": "bot"}
+    assert client.get(f"/v1/approvals/{approval_id}", headers=wrong).status_code == 401
+    missing = {**AUTH, "X-Aegis-Agent": "bot"}
+    assert client.get("/v1/approvals/does-not-exist", headers=missing).status_code == 404
+
+
+def test_bad_action_and_unknown_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "adm")
+    assert client.post("/v1/admin/approvals/x/explode", headers=ADMIN).status_code == 404
+    assert client.post("/v1/admin/approvals/x/approve", headers=ADMIN).status_code == 404
+
+
+def test_metrics_requires_admin_unless_public(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "adm")
+    monkeypatch.delenv("AEGIS_METRICS_PUBLIC", raising=False)
+    client.post("/v1/decide", json=body(text="hi"), headers=AUTH)
+    assert client.get("/metrics").status_code == 401
+    text = client.get("/metrics", headers=ADMIN).text
+    assert "aegis_decisions_total" in text
+    monkeypatch.setenv("AEGIS_METRICS_PUBLIC", "1")
+    assert client.get("/metrics").status_code == 200
+
+
+def test_oversized_arguments_rejected(client: TestClient) -> None:
+    r = client.post("/v1/decide", json=body(text="x" * 300_000), headers=AUTH)
+    assert r.status_code == 413

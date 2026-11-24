@@ -1,0 +1,20 @@
+# Run the gateway locally:
+#   export AEGIS_ADMIN_TOKEN=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
+#   docker compose -f deploy/docker-compose.yml up --build
+services:
+  aegis:
+    build:
+      context: ..
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?set AEGIS_ADMIN_TOKEN}
+    volumes:
+      - ../policies/gateway.example.yaml:/etc/aegis/policy.yaml:ro
+      - aegis-data:/data            # audit log: /data/audit.jsonl
+    command: ["--gateway-policy", "/etc/aegis/policy.yaml"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  aegis-data:
